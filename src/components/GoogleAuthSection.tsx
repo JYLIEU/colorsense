@@ -1,53 +1,40 @@
-﻿"use client";
+"use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { GoogleAuthProvider, signInWithPopup } from "firebase/auth";
-import { auth, isFirebaseConfigured } from "@/lib/firebase";
-import { Notice, resolveNextPath } from "./auth-utils";
+// Firebase Google 登录已在迁移到腾讯云 CloudBase 时停用（CloudBase 无对应能力）。
+// 保留原代码以备后续恢复或替换为其他登录方式。
 
-interface GoogleAuthSectionProps {
-  nextPath: string;
-}
+// import { useState } from "react";
+// import { useRouter } from "next/navigation";
+// import { GoogleAuthProvider, signInWithPopup } from "firebase/auth";
+// import { auth, isFirebaseConfigured } from "@/lib/firebase";
+// import { Notice, resolveNextPath } from "./auth-utils";
 
-export function GoogleAuthSection({ nextPath }: GoogleAuthSectionProps) {
-  const router = useRouter();
-  const [notice, setNotice] = useState<Notice>(null);
-  const [pending, setPending] = useState<boolean>(false);
+// interface GoogleAuthSectionProps {
+//   nextPath: string;
+// }
 
-  async function loginWithGoogle() {
-    if (!isFirebaseConfigured() || !auth) {
-      setNotice({ type: "error", text: "尚未配置 Firebase 环境变量，请先完成本地配置。" });
-      return;
-    }
-    setPending(true);
-    setNotice(null);
-    try {
-      await signInWithPopup(auth!, new GoogleAuthProvider());
-      router.push(await resolveNextPath(nextPath));
-      router.refresh();
-    } catch {
-      setNotice({ type: "error", text: "Google 登录失败，请稍后重试。" });
-    } finally {
-      setPending(false);
-    }
-  }
+export function GoogleAuthSection(_props: { nextPath: string }) {
+  // const router = useRouter();
+  // const [notice, setNotice] = useState<Notice>(null);
+  // const [pending, setPending] = useState<boolean>(false);
 
-  return (
-    <div className="mt-6 space-y-4">
-      {notice && (
-        <p
-          role="alert"
-          className={`rounded-xl px-4 py-3 text-sm leading-6 ${
-            notice.type === "success" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"
-          }`}
-        >
-          {notice.text}
-        </p>
-      )}
-      <button type="button" onClick={loginWithGoogle} disabled={pending} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 font-semibold text-slate-700 shadow-sm disabled:opacity-60">
-        {pending ? "Google 登录中..." : "使用 Google 登录"}
-      </button>
-    </div>
-  );
+  // async function loginWithGoogle() {
+  //   if (!isFirebaseConfigured() || !auth) {
+  //     setNotice({ type: "error", text: "尚未配置 Firebase 环境变量，请先完成本地配置。" });
+  //     return;
+  //   }
+  //   setPending(true);
+  //   setNotice(null);
+  //   try {
+  //     await signInWithPopup(auth!, new GoogleAuthProvider());
+  //     router.push(await resolveNextPath(nextPath));
+  //     router.refresh();
+  //   } catch {
+  //     setNotice({ type: "error", text: "Google 登录失败，请稍后重试。" });
+  //   } finally {
+  //     setPending(false);
+  //   }
+  // }
+
+  return null;
 }

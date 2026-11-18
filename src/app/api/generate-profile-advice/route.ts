@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { verifyAuth } from "@/lib/auth-server";
-import { getAdminDb } from "@/lib/firebase-admin";
+import { sql } from "@/lib/db";
 import { generateProfileAdvice } from "@/lib/ai";
-import { UserStyleProfile } from "@/lib/user-profile-types"; // Import UserStyleProfile type
+import { UserStyleProfile } from "@/lib/user-profile-types";
 
 export const runtime = "nodejs";
+
+const PROFILES_TABLE = "user_profiles";
 
 export async function POST(request: Request) {
   const user = await verifyAuth();
@@ -12,17 +14,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
 
-  const db = getAdminDb();
-  const profileRef = db.collection("users").doc(user.uid).collection("profile").doc("questionnaire");
-
   try {
-    const profileSnapshot = await profileRef.get();
-
-    if (!profileSnapshot.exists) {
+    const rows = await sql<{ data: UserStyleProfile | null }>(
+      `SELECT data FROM ${PROFILES_TABLE} WHERE uid = $1 LIMIT 1`,
+      [user.uid],
+    );
+    const data = rows[0]?.data;
+    if (!data) {
       return NextResponse.json({ success: false, error: "PROFILE_NOT_FOUND" }, { status: 404 });
     }
 
-    const profile = profileSnapshot.data() as UserStyleProfile;
+    const profile = data as unknown as UserStyleProfile;
 
     if (!profile.promptContext?.summaryText) {
       return NextResponse.json({ success: false, error: "PROMPT_CONTEXT_MISSING" }, { status: 400 });
@@ -32,13 +34,12 @@ export async function POST(request: Request) {
 
     const advice = await generateProfileAdvice(profile.promptContext.summaryText);
 
-    // Save the generated advice back to the user's profile
-    await profileRef.set(
-      {
-        generatedProfileAdvice: advice, // Store the AI generated advice
-        updatedAt: new Date(),
-      },
-      { merge: true },
+    // 将生成的建议合并回 data 列（jsonb || 顶层合并，保留其余字段）
+    await sql(
+      `UPDATE ${PROFILES_TABLE}
+       SET data = data || $2::jsonb, updated_at = now()
+       WHERE uid = $1`,
+      [user.uid, JSON.stringify({ generatedProfileAdvice: advice, updatedAt: new Date().toISOString() })],
     );
 
     return NextResponse.json({

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { SEASONS } from "@/lib/seasons";
 import type { SeasonType } from "@/lib/seasons";
 import { verifyAuth } from "@/lib/auth-server";
-import { getAdminDb } from "@/lib/firebase-admin";
+import { sql } from "@/lib/db";
 import { generateDoubaoStyleAdvice } from "@/lib/ai";
 import type { DiagnosisQuality } from "@/lib/types";
 import { getUserProfile } from "@/lib/firestore-user-profiles";
@@ -94,7 +94,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, error: "请先登录后再开始诊断。" }, { status: 401 });
   }
 
-  const canUseDiagnosisFeatures = user.email_verified === true || user.firebase?.sign_in_provider === "google.com";
+  // CloudBase 邮箱注册即完成验证；仅在明确未验证时拒绝。
+  const canUseDiagnosisFeatures = user.email_verified !== false;
   if (!canUseDiagnosisFeatures) {
     return NextResponse.json({ success: false, error: "请先验证邮箱后再进行诊断。" }, { status: 403 });
   }
@@ -183,17 +184,32 @@ export async function POST(request: Request) {
     
     const { scores, ...requiredDiagnosisFields } = diagnosis;
 
-    // 10. 保存到数据库
+    // 10. 保存到数据库（PostgreSQL：完整诊断 JSON 存 data 列，常用查询字段单独建列）
     let diagnosisId: string;
     try {
-      const docRef = await getAdminDb().collection("diagnoses").add({
+      const diagnosisData = {
         ...requiredDiagnosisFields,
         ...(scores === undefined ? {} : { scores }),
         doubaoAdvice,
-        userId: user.uid,
-        createdAt: new Date(),
-      });
-      diagnosisId = docRef.id;
+      };
+      const inserted = await sql<{ id: number }>(
+        `INSERT INTO diagnoses (user_id, season_type, confidence, source, scores, doubao_advice, data)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb)
+         RETURNING id`,
+        [
+          user.uid,
+          diagnosis.seasonType,
+          diagnosis.confidence,
+          diagnosis.source,
+          scores === undefined ? null : JSON.stringify(scores),
+          doubaoAdvice === undefined || doubaoAdvice === null ? null : JSON.stringify(doubaoAdvice),
+          JSON.stringify(diagnosisData),
+        ],
+      );
+      diagnosisId = inserted[0]?.id !== undefined ? String(inserted[0].id) : "";
+      if (!diagnosisId) {
+        throw new Error("empty id from insert");
+      }
       console.info("[diagnose-debug] 保存成功", { diagnosisId });
     } catch (error) {
       console.error("[diagnose-debug] 保存失败:", error);

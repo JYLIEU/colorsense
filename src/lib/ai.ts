@@ -3,9 +3,9 @@ import { z } from "zod";
 import { UserStyleProfilePromptContext } from "./user-profile-types";
 
 // --- Doubao 配置 ---
-const DOUBAO_API_KEY = "ark-df3720c0-0027-4cf1-9535-793826c8f74e-6aa66";
-const DOUBAO_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
-const DOUBAO_MODEL = "doubao-seed-2-0-pro-260215";
+const DOUBAO_API_KEY = process.env.DOUBAO_API_KEY ?? "";
+const DOUBAO_BASE_URL = process.env.DOUBAO_BASE_URL ?? "https://ark.cn-beijing.volces.com/api/v3";
+const DOUBAO_MODEL = process.env.DOUBAO_MODEL ?? "doubao-seed-2-0-pro-260215";
 
 // --- System Prompt ---
 // src/lib/ai.ts

@@ -1,72 +1,70 @@
 import { NextResponse } from "next/server";
 import { verifyAuth } from "@/lib/auth-server";
-import { getAdminDb } from "@/lib/firebase-admin";
+import { sql, toIsoString } from "@/lib/db";
+import type { Diagnosis } from "@/lib/types";
 
-export function GET() {
-  return NextResponse.json(
-    { success: false, error: "This endpoint is deprecated. Diagnosis results are provided by Firestore." },
-    { status: 410 },
-  );
-}
+export const runtime = "nodejs";
 
-interface RouteContext {
-  params: {
-    id: string;
+function toDiagnosis(row: {
+  id: number | string;
+  user_id: string;
+  data: Partial<Diagnosis> | null;
+  scores: Record<string, number> | null;
+  doubao_advice: unknown;
+  created_at: string | null;
+}): Diagnosis {
+  const data = row.data && typeof row.data === "object" ? row.data : {};
+  return {
+    ...(data as Diagnosis),
+    id: String(row.id),
+    userId: row.user_id,
+    scores: (row.scores ?? {}) as Diagnosis["scores"],
+    doubaoAdvice: row.doubao_advice as Diagnosis["doubaoAdvice"],
+    createdAt: toIsoString(row.created_at) ?? new Date().toISOString(),
   };
 }
 
-export async function DELETE(_request: Request, { params }: RouteContext) {
-  const diagnosisId = params.id;
+export async function GET(_request: Request, context: { params: { id: string } }) {
   const user = await verifyAuth();
-
   if (!user) {
-    console.warn("[diagnosis-delete] Unauthorized delete request", { diagnosisId });
-    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ success: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
 
-  console.info("[diagnosis-delete] Delete request started", {
-    diagnosisId,
-    userId: user.uid,
-  });
+  const rows = await sql<{ id: number; user_id: string; data: Partial<Diagnosis> | null; scores: Record<string, number> | null; doubao_advice: unknown; created_at: string | null }>(
+    `SELECT id, user_id, data, scores, doubao_advice, created_at
+     FROM diagnoses
+     WHERE id = $1::bigint
+     LIMIT 1`,
+    [context.params.id],
+  );
 
-  try {
-    const docRef = getAdminDb().collection("diagnoses").doc(diagnosisId);
-    const snapshot = await docRef.get();
-
-    if (!snapshot.exists) {
-      console.warn("[diagnosis-delete] Diagnosis not found", {
-        diagnosisId,
-        userId: user.uid,
-      });
-      return NextResponse.json({ success: false, error: "Diagnosis not found" }, { status: 404 });
-    }
-
-    const data = snapshot.data();
-    if (data?.userId !== user.uid) {
-      console.warn("[diagnosis-delete] Forbidden delete attempt", {
-        diagnosisId,
-        userId: user.uid,
-        ownerMatches: false,
-      });
-      return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
-    }
-
-    // Current diagnosis records do not store uploaded images or subcollections.
-    // Deletion scope is therefore limited to the Firestore document itself.
-    await docRef.delete();
-
-    console.info("[diagnosis-delete] Delete request succeeded", {
-      diagnosisId,
-      userId: user.uid,
-    });
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("[diagnosis-delete] Delete request failed", {
-      diagnosisId,
-      userId: user.uid,
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return NextResponse.json({ success: false, error: "Delete failed" }, { status: 500 });
+  const row = rows[0];
+  if (!row) {
+    return NextResponse.json({ success: false, error: "DIAGNOSIS_NOT_FOUND" }, { status: 404 });
   }
+  if (row.user_id !== user.uid) {
+    return NextResponse.json({ success: false, error: "FORBIDDEN" }, { status: 403 });
+  }
+
+  return NextResponse.json({ success: true, diagnosis: toDiagnosis(row) });
+}
+
+export async function DELETE(_request: Request, context: { params: { id: string } }) {
+  const user = await verifyAuth();
+  if (!user) {
+    return NextResponse.json({ success: false, error: "UNAUTHORIZED" }, { status: 401 });
+  }
+
+  const rows = await sql<{ user_id: string }>(`SELECT user_id FROM diagnoses WHERE id = $1::bigint`, [context.params.id]);
+  const row = rows[0];
+  if (!row) {
+    return NextResponse.json({ success: false, error: "DIAGNOSIS_NOT_FOUND" }, { status: 404 });
+  }
+  if (row.user_id !== user.uid) {
+    return NextResponse.json({ success: false, error: "FORBIDDEN" }, { status: 403 });
+  }
+
+  await sql(`DELETE FROM diagnoses WHERE id = $1::bigint`, [context.params.id]);
+
+  return NextResponse.json({ success: true });
 }

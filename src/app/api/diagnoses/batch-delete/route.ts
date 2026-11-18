@@ -1,118 +1,58 @@
 import { NextResponse } from "next/server";
 import { verifyAuth } from "@/lib/auth-server";
-import { getAdminDb } from "@/lib/firebase-admin";
+import { sql } from "@/lib/db";
 
-const MAX_BATCH_SIZE = 500;
+export const runtime = "nodejs";
 
-interface BatchDeleteRequest {
-  ids?: unknown;
-}
-
-interface FailedDelete {
+interface ErrorEntry {
   id: string;
-  reason: "not_found" | "forbidden" | "invalid_id" | "delete_failed";
-}
-
-function chunk<T>(items: T[], size: number) {
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-  return chunks;
+  error: string;
 }
 
 export async function POST(request: Request) {
   const user = await verifyAuth();
-
   if (!user) {
-    console.warn("[diagnosis-batch-delete] Unauthorized batch delete request");
-    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ success: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
 
-  let payload: BatchDeleteRequest;
+  let ids: unknown;
   try {
-    payload = (await request.json()) as BatchDeleteRequest;
+    ids = (await request.json())?.ids;
   } catch {
-    return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
+    return NextResponse.json({ success: false, error: "VALIDATION_ERROR" }, { status: 400 });
   }
 
-  const ids = Array.isArray(payload.ids)
-    ? [...new Set(payload.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0))]
-    : [];
-
-  if (ids.length === 0) {
-    return NextResponse.json({ success: false, error: "No diagnosis ids provided" }, { status: 400 });
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return NextResponse.json({ success: false, error: "VALIDATION_ERROR" }, { status: 400 });
   }
 
-  console.info("[diagnosis-batch-delete] Batch delete request started", {
-    userId: user.uid,
-    requestedCount: ids.length,
-  });
+  const failed: ErrorEntry[] = [];
 
-  const db = getAdminDb();
-  const failed: FailedDelete[] = [];
-  const deletableRefs: FirebaseFirestore.DocumentReference[] = [];
-
-  try {
-    for (const idGroup of chunk(ids, MAX_BATCH_SIZE)) {
-      const refs = idGroup.map((id) => db.collection("diagnoses").doc(id));
-      const snapshots = await db.getAll(...refs);
-
-      snapshots.forEach((snapshot, index) => {
-        const id = idGroup[index];
-
-        if (!snapshot.exists) {
-          failed.push({ id, reason: "not_found" });
-          return;
-        }
-
-        const data = snapshot.data();
-        if (data?.userId !== user.uid) {
-          failed.push({ id, reason: "forbidden" });
-          return;
-        }
-
-        deletableRefs.push(snapshot.ref);
-      });
+  for (const rawId of ids) {
+    if (typeof rawId !== "string" && typeof rawId !== "number") {
+      continue;
     }
-
-    // Current diagnosis records do not store uploaded images, Storage URLs, or subcollections.
-    // Batch cleanup therefore deletes only diagnoses/{diagnosisId} documents. If images or
-    // child collections are added later, clean them before or inside this loop.
-    for (const refGroup of chunk(deletableRefs, MAX_BATCH_SIZE)) {
-      const batch = db.batch();
-      refGroup.forEach((ref) => batch.delete(ref));
-      await batch.commit();
+    const id = String(rawId);
+    try {
+      const rows = await sql<{ user_id: string }>(`SELECT user_id FROM diagnoses WHERE id = $1::bigint`, [id]);
+      const row = rows[0];
+      if (!row) {
+        failed.push({ id, error: "诊断记录不存在。" });
+        continue;
+      }
+      if (row.user_id !== user.uid) {
+        failed.push({ id, error: "无权删除该诊断记录。" });
+        continue;
+      }
+      await sql(`DELETE FROM diagnoses WHERE id = $1::bigint`, [id]);
+    } catch (error) {
+      failed.push({ id, error: error instanceof Error ? error.message : "删除失败。" });
     }
-
-    const deletedIds = deletableRefs.map((ref) => ref.id);
-
-    console.info("[diagnosis-batch-delete] Batch delete request completed", {
-      userId: user.uid,
-      requestedCount: ids.length,
-      deletedCount: deletedIds.length,
-      failedCount: failed.length,
-      failedReasons: failed.reduce<Record<string, number>>((acc, item) => {
-        acc[item.reason] = (acc[item.reason] ?? 0) + 1;
-        return acc;
-      }, {}),
-    });
-
-    return NextResponse.json({
-      success: failed.length === 0,
-      deletedIds,
-      failed,
-      deletedCount: deletedIds.length,
-      failedCount: failed.length,
-    });
-  } catch (error) {
-    console.error("[diagnosis-batch-delete] Batch delete request failed", {
-      userId: user.uid,
-      requestedCount: ids.length,
-      deletedCount: deletableRefs.length,
-      failedCount: failed.length,
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return NextResponse.json({ success: false, error: "Batch delete failed", deletedIds: [], failed }, { status: 500 });
   }
+
+  if (failed.length > 0) {
+    return NextResponse.json({ success: false, error: "DELETE_FAILED", details: failed }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true, deletedCount: ids.length });
 }

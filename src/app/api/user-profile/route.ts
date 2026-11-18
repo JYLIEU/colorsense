@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { verifyAuth } from "@/lib/auth-server";
-import { getAdminDb } from "@/lib/firebase-admin";
+import { sql } from "@/lib/db";
 import { buildUserProfilePromptContext } from "@/lib/user-profile-summary";
-import type { UserStyleProfileInput } from "@/lib/user-profile-types";
+import type { UserStyleProfile, UserStyleProfileInput } from "@/lib/user-profile-types";
 
 export const runtime = "nodejs";
+
+const USERS_TABLE = "users";
+const PROFILES_TABLE = "user_profiles";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
@@ -71,20 +74,26 @@ export async function GET() {
     return NextResponse.json({ success: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
 
-  const db = getAdminDb();
-  const userRef = db.collection("users").doc(user.uid);
-  const profileRef = userRef.collection("profile").doc("questionnaire");
+  const userRows = await sql<{ email: string | null; onboarding_completed: boolean }>(
+    `SELECT email, onboarding_completed FROM ${USERS_TABLE} WHERE uid = $1 LIMIT 1`,
+    [user.uid],
+  ).catch(() => []);
+  const profileRows = await sql<{ data: UserStyleProfile | null }>(
+    `SELECT data FROM ${PROFILES_TABLE} WHERE uid = $1 LIMIT 1`,
+    [user.uid],
+  ).catch(() => []);
 
-  const [userSnapshot, profileSnapshot] = await Promise.all([userRef.get(), profileRef.get()]);
+  const userData = userRows[0] ?? null;
+  const profileData = profileRows[0]?.data ?? null;
 
   return NextResponse.json({
     success: true,
     user: {
       uid: user.uid,
-      email: user.email ?? userSnapshot.data()?.email ?? null,
+      email: user.email ?? userData?.email ?? null,
     },
-    onboardingCompleted: userSnapshot.data()?.onboardingCompleted === true,
-    profile: profileSnapshot.exists ? profileSnapshot.data() : null,
+    onboardingCompleted: userData?.onboarding_completed === true,
+    profile: profileData ?? null,
   });
 }
 
@@ -107,42 +116,38 @@ export async function PUT(request: Request) {
   }
 
   const promptContext = buildUserProfilePromptContext(profileInput);
-  const now = new Date();
-  const db = getAdminDb();
-  const userRef = db.collection("users").doc(user.uid);
-  const profileRef = userRef.collection("profile").doc("questionnaire");
+  const profileData: UserStyleProfile = {
+    ...profileInput,
+    aiPromptReady: true,
+    promptContext,
+    updatedAt: new Date().toISOString(),
+  };
 
   try {
-    await db.runTransaction(async (transaction) => {
-      const profileSnapshot = await transaction.get(profileRef);
-      transaction.set(
-        userRef,
-        {
-          email: user.email ?? null,
-          onboardingCompleted: true,
-          profileVersion: 2,
-          updatedAt: now,
-          createdAt: now,
-        },
-        { merge: true },
-      );
-      transaction.set(
-        profileRef,
-        {
-          ...profileInput,
-          aiPromptReady: true,
-          promptContext,
-          updatedAt: now,
-          createdAt: profileSnapshot.exists ? profileSnapshot.data()?.createdAt ?? now : now,
-        },
-        { merge: true },
-      );
-    });
+    // PostgreSQL 无需事务：users 先 upsert（user_profiles 外键依赖它），再 upsert 问卷。
+    await sql(
+      `INSERT INTO ${USERS_TABLE} (uid, email, onboarding_completed, profile_version)
+       VALUES ($1, $2, TRUE, 2)
+       ON CONFLICT (uid) DO UPDATE
+       SET email = EXCLUDED.email, onboarding_completed = TRUE, profile_version = 2, updated_at = now()`,
+      [user.uid, user.email ?? null],
+    );
 
-    // Asynchronously trigger AI profile advice generation
-    void fetch("/api/generate-profile-advice", {
+    await sql(
+      `INSERT INTO ${PROFILES_TABLE} (uid, data)
+       VALUES ($1, $2::jsonb)
+       ON CONFLICT (uid) DO UPDATE
+       SET data = EXCLUDED.data, updated_at = now()`,
+      [user.uid, JSON.stringify(profileData)],
+    );
+
+    // 异步触发 AI 形象档案生成，转发原始 Authorization 头以通过鉴权
+    const authHeader = request.headers.get("authorization");
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3001";
+    void fetch(`${appUrl}/api/generate-profile-advice`, {
       method: "POST",
-    });
+      headers: authHeader ? { Authorization: authHeader } : {},
+    }).catch(() => undefined);
   } catch (error) {
     console.error("[user-profile] save failed", {
       message: error instanceof Error ? error.message : String(error),

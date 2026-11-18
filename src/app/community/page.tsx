@@ -16,7 +16,7 @@ import {
 } from "@/lib/firestore-community-posts";
 import { useAuth } from "@/lib/useAuth";
 import { Heart, MessageCircle, Plus, Send, Share2, Sparkles } from "lucide-react";
-import type { User } from "firebase/auth";
+import type { AuthUser } from "@/lib/cloudbase";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 const HOT_TAGS = [
@@ -355,7 +355,7 @@ function CommunityPostCard({
   onNotice,
 }: {
   post: CommunityPost;
-  currentUser: User | null;
+  currentUser: AuthUser | null;
   isAuthenticated: boolean;
   userName: string;
   onError: (message: string) => void;

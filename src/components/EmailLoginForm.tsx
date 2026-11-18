@@ -1,9 +1,8 @@
-﻿"use client";
+"use client";
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { getCbAuth } from "@/lib/cloudbase";
 import { Notice, resolveNextPath, canSubmit } from "./auth-utils";
 
 interface EmailLoginFormProps {
@@ -25,12 +24,15 @@ export function EmailLoginForm({ nextPath }: EmailLoginFormProps) {
     setPending(true);
     setNotice(null);
     try {
-      const credential = await signInWithEmailAndPassword(auth!, email.trim(), password);
-      await credential.user.reload();
-      if (!credential.user.emailVerified) {
-        await signOut(auth!);
-        setNotice({ type: "error", text: "请先前往邮箱完成验证。" });
+      const auth = getCbAuth();
+      if (!auth) {
+        setNotice({ type: "error", text: "CloudBase 未配置，无法登录。" });
         return;
+      }
+      const result = (await auth.signInWithEmailAndPassword(email.trim(), password)) as { error?: unknown };
+      const error = result?.error;
+      if (error) {
+        throw error;
       }
       router.push(await resolveNextPath(nextPath));
       router.refresh();

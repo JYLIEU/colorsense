@@ -5,7 +5,7 @@ import { Navbar } from "@/components/Navbar";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ProfileSummary } from "@/components/profile/ProfileSummary";
 import { StyleProfileForm } from "@/components/profile/StyleProfileForm";
-import { auth } from "@/lib/firebase";
+import { useAuth } from "@/lib/useAuth";
 import type { UserStyleProfile } from "@/lib/user-profile-types";
 
 interface LatestDiagnosis {
@@ -25,20 +25,21 @@ export default function ProfileStylePage() {
 }
 
 function ProfileStyleContent() {
+  const { currentUser } = useAuth();
   const [profile, setProfile] = useState<UserStyleProfile | null>(null);
   const [latestDiagnosis, setLatestDiagnosis] = useState<LatestDiagnosis | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
 
   async function loadProfile() {
-    if (!auth?.currentUser) {
+    if (!currentUser) {
       setLoading(false);
       return;
     }
 
     setLoading(true);
     try {
-      const token = await auth.currentUser.getIdToken();
+      const token = await currentUser.getIdToken();
       const [profileResponse, diagnosisResponse] = await Promise.all([
         fetch("/api/user-profile", {
           headers: { Authorization: `Bearer ${token}` },
@@ -63,7 +64,7 @@ function ProfileStyleContent() {
 
   useEffect(() => {
     void loadProfile();
-  }, []);
+  }, [currentUser]);
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-white to-indigo-50">

@@ -1,4 +1,4 @@
-﻿import { auth, isFirebaseConfigured } from "@/lib/firebase";
+import { getCbAccessToken, isCloudbaseConfigured } from "@/lib/cloudbase";
 
 export type Notice = { type: "success" | "error"; text: string } | null;
 
@@ -18,12 +18,12 @@ export function getVerificationReturnUrl() {
 }
 
 export async function resolveNextPath(defaultPath: string) {
-  if (!auth?.currentUser) {
+  const token = await getCbAccessToken();
+  if (!token) {
     return defaultPath;
   }
 
   try {
-    const token = await auth.currentUser.getIdToken();
     const response = await fetch("/api/user-profile", {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -39,8 +39,8 @@ export async function resolveNextPath(defaultPath: string) {
 }
 
 export function canSubmit(email: string, password: string, setNotice: (notice: Notice) => void) {
-  if (!isFirebaseConfigured() || !auth) {
-    setNotice({ type: "error", text: "尚未配置 Firebase 环境变量，请先完成本地配置。" });
+  if (!isCloudbaseConfigured()) {
+    setNotice({ type: "error", text: "尚未配置 CloudBase 环境变量，请先完成本地配置。" });
     return false;
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {

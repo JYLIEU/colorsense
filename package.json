@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.99.0",
+    "@cloudbase/js-sdk": "^3.11.1",
+    "@cloudbase/manager-node": "^5.10.4",
     "@emotion/is-prop-valid": "^1.4.0",
     "@google/generative-ai": "^0.24.1",
     "@uiw/color-convert": "^2.10.3",

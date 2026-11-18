@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { EmailAuthProvider, reauthenticateWithCredential, updatePassword } from "firebase/auth";
+import { getCbAuth } from "@/lib/cloudbase";
 import { KeyRound, LogOut } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { FooterGradient } from "@/components/home/FooterGradient";
@@ -66,9 +66,13 @@ function SettingsContent() {
 
     setSavingPassword(true);
     try {
-      const credential = EmailAuthProvider.credential(currentUser.email, currentPassword);
-      await reauthenticateWithCredential(currentUser, credential);
-      await updatePassword(currentUser, newPassword);
+      const auth = getCbAuth();
+      if (!auth) {
+        setPasswordNotice({ type: "error", text: TEXT.loginExpiredChangePassword });
+        return;
+      }
+      // CloudBase 通过旧密码重置密码（resetPasswordForOld），无需重新登录
+      await auth.resetPasswordForOld({ old_password: currentPassword, new_password: newPassword });
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
@@ -166,10 +170,10 @@ function PasswordField({ label, value, autoComplete, onChange }: { label: React.
 
 function getPasswordErrorMessage(error: unknown) {
   const errorCode = getErrorCode(error);
-  if (errorCode === "auth/wrong-password" || errorCode === "auth/invalid-credential") {
+  if (errorCode === "auth/wrong-password" || errorCode === "auth/invalid-credential" || errorCode === "invalid_username_or_password") {
     return TEXT.currentPasswordWrong;
   }
-  if (errorCode === "auth/weak-password") {
+  if (errorCode === "auth/weak-password" || errorCode === "weak_password" || errorCode === "invalid_password") {
     return TEXT.newPasswordShort;
   }
   if (errorCode === "auth/requires-recent-login" || errorCode === "auth/user-token-expired") {
@@ -179,5 +183,11 @@ function getPasswordErrorMessage(error: unknown) {
 }
 
 function getErrorCode(error: unknown) {
-  return typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+  if (typeof error !== "object" || error === null) {
+    return "";
+  }
+  if ("error" in error && typeof error.error === "string" && error.error) {
+    return String(error.error);
+  }
+  return "code" in error ? String(error.code) : "";
 }

@@ -23,7 +23,7 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!loading && !authorized) {
-      router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+      //router.replace(`/login?next=${encodeURIComponent(pathname)}`);
     }
   }, [authorized, loading, pathname, router]);
 
@@ -47,7 +47,7 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
           return;
         }
         if (!payload.success || !payload.onboardingCompleted || !payload.profile) {
-          router.replace("/onboarding/style-profile");
+          //router.replace("/onboarding/style-profile");
           return;
         }
       } catch {
@@ -68,15 +68,15 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
     };
   }, [authorized, currentUser, pathname, router]);
 
-  if (loading || !authorized || checkingQuestionnaire) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-white to-indigo-50 px-6">
-        <p className="rounded-xl bg-white px-5 py-4 text-slate-600 shadow-sm">
-          {loading || checkingQuestionnaire ? "正在确认登录状态..." : "请先登录并完成邮箱验证。"}
-        </p>
-      </main>
-    );
-  }
+  // if (loading || !authorized || checkingQuestionnaire) {
+  //   return (
+  //     <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-white to-indigo-50 px-6">
+  //       <p className="rounded-xl bg-white px-5 py-4 text-slate-600 shadow-sm">
+  //         {loading || checkingQuestionnaire ? "正在确认登录状态..." : "请先登录并完成邮箱验证。"}
+  //       </p>
+  //     </main>
+  //   );
+  // }
 
   return children;
 }

@@ -1,5 +1,4 @@
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { apiFetch } from "@/lib/cloudbase";
 
 export interface AccountProfile {
   nickname: string;
@@ -8,46 +7,48 @@ export interface AccountProfile {
   updatedAt?: unknown;
 }
 
-export async function getAccountProfile(userId: string): Promise<AccountProfile | null> {
-  if (!db) {
+/**
+ * 读取当前登录用户的账户资料（昵称、邮箱）。
+ * uid 由服务端根据 accessToken 解析，客户端传入仅为保持旧签名兼容。
+ */
+export async function getAccountProfile(_userId: string): Promise<AccountProfile | null> {
+  try {
+    const res = await apiFetch("/api/account/profile");
+    if (!res.ok) {
+      return null;
+    }
+    const payload = (await res.json()) as { success?: boolean; profile?: AccountProfile | null };
+    if (!payload?.success || !payload.profile) {
+      return null;
+    }
+    return payload.profile;
+  } catch {
     return null;
   }
-
-  const snapshot = await getDoc(doc(db, "users", userId));
-  if (!snapshot.exists()) {
-    return null;
-  }
-
-  const data = snapshot.data() as Partial<AccountProfile>;
-  return {
-    nickname: typeof data.nickname === "string" ? data.nickname : "",
-    email: typeof data.email === "string" ? data.email : "",
-    createdAt: data.createdAt,
-    updatedAt: data.updatedAt,
-  };
 }
 
-export async function saveAccountProfile(userId: string, email: string, nickname: string) {
-  if (!db) {
-    throw new Error("FIREBASE_NOT_CONFIGURED");
-  }
-
+export async function saveAccountProfile(_userId: string, email: string, nickname: string) {
   const trimmedNickname = nickname.trim();
   if (!trimmedNickname) {
     throw new Error("NICKNAME_REQUIRED");
   }
 
-  const profileRef = doc(db, "users", userId);
-  const snapshot = await getDoc(profileRef);
+  const res = await apiFetch("/api/account/profile", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nickname: trimmedNickname, email }),
+  });
 
-  await setDoc(
-    profileRef,
-    {
-      nickname: trimmedNickname,
-      email,
-      updatedAt: serverTimestamp(),
-      ...(snapshot.exists() ? {} : { createdAt: serverTimestamp() }),
-    },
-    { merge: true },
-  );
+  if (!res.ok) {
+    let error = "SAVE_FAILED";
+    try {
+      const payload = (await res.json()) as { error?: string };
+      if (payload?.error) {
+        error = payload.error;
+      }
+    } catch {
+      // 忽略解析错误
+    }
+    throw new Error(error);
+  }
 }

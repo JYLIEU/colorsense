@@ -1,7 +1,7 @@
-import { getAdminDb } from "./firebase-admin";
+import { sql, toIsoString, type SqlParameter } from "./db";
 import type { OutfitHistoryRecord, OutfitHistorySummary, OutfitInspirationRequest, OutfitInspirationResult } from "./outfit-types";
 
-const COLLECTION_NAME = "outfitRecords";
+const TABLE_NAME = "outfit_records";
 
 const EMPTY_REQUEST: OutfitInspirationRequest = {
   season: "",
@@ -31,36 +31,30 @@ const EMPTY_RESULT: OutfitInspirationResult = {
   reason: "",
 };
 
-type FirestoreTimestampLike = {
-  toDate?: () => Date;
-};
-
-function asTimestampIso(value: unknown) {
-  if (typeof value === "string") {
-    return value;
-  }
-
-  if (value && typeof value === "object") {
-    const timestamp = value as FirestoreTimestampLike;
-    if (typeof timestamp.toDate === "function") {
-      return timestamp.toDate().toISOString();
-    }
-  }
-
-  return new Date().toISOString();
+interface OutfitRecordRow {
+  id: string | number;
+  user_id: string;
+  request: Partial<OutfitInspirationRequest> | null;
+  result: Partial<OutfitInspirationResult> | null;
+  source: string | null;
+  image_url: string | null;
+  outfit_id: string | null;
+  result_id: string | null;
+  created_at: string | null;
 }
 
-function toFullRecord(id: string, data: Record<string, unknown>): OutfitHistoryRecord {
-  const request = data.request && typeof data.request === "object" ? (data.request as Partial<OutfitInspirationRequest>) : {};
-  const result = data.result && typeof data.result === "object" ? (data.result as Partial<OutfitInspirationResult>) : {};
+function toFullRecord(row: OutfitRecordRow): OutfitHistoryRecord {
+  const id = String(row.id);
+  const request = row.request && typeof row.request === "object" ? row.request : {};
+  const result = row.result && typeof row.result === "object" ? row.result : {};
   return {
     id,
-    userId: typeof data.userId === "string" ? data.userId : "",
-    createdAt: asTimestampIso(data.createdAt),
-    source: data.source === "ai" ? "ai" : "mock",
-    outfitId: typeof data.outfitId === "string" ? data.outfitId : id,
-    resultId: typeof data.resultId === "string" ? data.resultId : id,
-    imageUrl: typeof data.imageUrl === "string" && data.imageUrl.trim() ? data.imageUrl : undefined,
+    userId: typeof row.user_id === "string" ? row.user_id : "",
+    createdAt: toIsoString(row.created_at) ?? new Date().toISOString(),
+    source: row.source === "ai" ? "ai" : "mock",
+    outfitId: row.outfit_id ?? id,
+    resultId: row.result_id ?? id,
+    imageUrl: typeof row.image_url === "string" && row.image_url.trim() ? row.image_url : undefined,
     request: {
       ...EMPTY_REQUEST,
       ...request,
@@ -107,6 +101,10 @@ function toSummary(record: OutfitHistoryRecord): OutfitHistorySummary {
   };
 }
 
+const SELECT_COLUMNS = `
+  id, user_id, request, result, source, image_url, outfit_id, result_id, created_at
+`;
+
 export async function createUserOutfitRecord(
   userId: string,
   input: {
@@ -116,52 +114,53 @@ export async function createUserOutfitRecord(
     imageUrl?: string;
   },
 ) {
-  const db = getAdminDb();
-  const docRef = await db.collection(COLLECTION_NAME).add({
-    request: input.request,
-    result: input.result,
-    source: input.source,
-    userId,
-    createdAt: new Date(),
-    ...(input.imageUrl ? { imageUrl: input.imageUrl } : {}),
-  });
-  await docRef.update({
-    outfitId: docRef.id,
-    resultId: docRef.id,
-  });
-  return docRef.id;
+  const inserted = await sql<{ id: number }>(
+    `INSERT INTO ${TABLE_NAME} (user_id, request, result, source, image_url)
+     VALUES ($1, $2::jsonb, $3::jsonb, $4, $5)
+     RETURNING id`,
+    [userId, JSON.stringify(input.request), JSON.stringify(input.result), input.source, input.imageUrl ?? null],
+  );
+  const id = inserted[0]?.id;
+  if (id === undefined) {
+    throw new Error("创建穿搭记录失败。");
+  }
+
+  const recordId = String(id);
+  await sql(
+    `UPDATE ${TABLE_NAME} SET outfit_id = $2, result_id = $3 WHERE id = $1::bigint`,
+    [recordId, recordId, recordId],
+  );
+  return recordId;
 }
 
 export async function listUserOutfitRecords(userId: string) {
-  const db = getAdminDb();
-  const snapshot = await db.collection(COLLECTION_NAME).where("userId", "==", userId).get();
-  const records = snapshot.docs
-    .map((doc) => toFullRecord(doc.id, doc.data()))
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-
-  return records.map(toSummary);
+  const rows = await sql<OutfitRecordRow>(
+    `SELECT ${SELECT_COLUMNS} FROM ${TABLE_NAME} WHERE user_id = $1 ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows.map((row) => toSummary(toFullRecord(row)));
 }
 
 export async function getUserOutfitRecord(id: string, userId: string) {
-  const db = getAdminDb();
-  const snapshot = await db.collection(COLLECTION_NAME).doc(id).get();
-
-  if (!snapshot.exists) {
+  const rows = await sql<OutfitRecordRow>(`SELECT ${SELECT_COLUMNS} FROM ${TABLE_NAME} WHERE id = $1::bigint LIMIT 1`, [
+    id,
+  ]);
+  const row = rows[0];
+  if (!row) {
     return null;
   }
 
-  const record = toFullRecord(snapshot.id, snapshot.data() ?? {});
+  const record = toFullRecord(row);
   return record.userId === userId ? record : null;
 }
 
 export async function deleteUserOutfitRecord(id: string, userId: string) {
-  const db = getAdminDb();
   const record = await getUserOutfitRecord(id, userId);
   if (!record) {
     return false;
   }
 
-  await db.collection(COLLECTION_NAME).doc(id).delete();
+  await sql(`DELETE FROM ${TABLE_NAME} WHERE id = $1::bigint`, [id]);
   return true;
 }
 
@@ -175,21 +174,40 @@ export async function updateUserOutfitRecord(
     imageUrl: string;
   }>,
 ) {
-  const db = getAdminDb();
   const record = await getUserOutfitRecord(id, userId);
   if (!record) {
     return null;
   }
 
-  const docRef = db.collection(COLLECTION_NAME).doc(id);
-  await docRef.update({
-    ...(input.request ? { request: { ...record.request, ...input.request } } : {}),
-    ...(input.result ? { result: { ...record.result, ...input.result } } : {}),
-    ...(input.source ? { source: input.source } : {}),
-    ...(typeof input.imageUrl === "string" ? { imageUrl: input.imageUrl } : {}),
-    outfitId: record.outfitId ?? id,
-    resultId: record.resultId ?? id,
-  });
+  const sets: string[] = [];
+  const params: SqlParameter[] = [];
+  let paramIndex = 1;
+
+  if (input.request) {
+    sets.push(`request = request || $${paramIndex}::jsonb`);
+    params.push(JSON.stringify(input.request));
+    paramIndex += 1;
+  }
+  if (input.result) {
+    sets.push(`result = result || $${paramIndex}::jsonb`);
+    params.push(JSON.stringify(input.result));
+    paramIndex += 1;
+  }
+  if (input.source) {
+    sets.push(`source = $${paramIndex}`);
+    params.push(input.source);
+    paramIndex += 1;
+  }
+  if (typeof input.imageUrl === "string") {
+    sets.push(`image_url = $${paramIndex}`);
+    params.push(input.imageUrl ? input.imageUrl : null);
+    paramIndex += 1;
+  }
+
+  if (sets.length > 0) {
+    params.push(id);
+    await sql(`UPDATE ${TABLE_NAME} SET ${sets.join(", ")} WHERE id = $${paramIndex}::bigint`, params);
+  }
 
   return id;
 }

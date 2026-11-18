@@ -1,57 +1,68 @@
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, where } from "firebase/firestore";
-import { db } from "./firebase";
+import { apiFetch } from "./cloudbase";
 import type { Diagnosis, NewDiagnosis } from "./types";
 
-function getDiagnosesCollection() {
-  if (!db) {
-    throw new Error("尚未配置 Firebase，无法访问诊断记录。");
-  }
-  return collection(db, "diagnoses");
+interface ApiListResponse {
+  success?: boolean;
+  error?: string;
+  diagnoses?: Diagnosis[];
 }
 
-export async function createDiagnosis(userId: string, input: NewDiagnosis) {
-  const { scores, ...requiredFields } = input;
-  const ref = await addDoc(getDiagnosesCollection(), {
-    ...requiredFields,
-    ...(scores === undefined ? {} : { scores }),
-    userId,
-    createdAt: serverTimestamp(),
+interface ApiDetailResponse {
+  success?: boolean;
+  error?: string;
+  diagnosis?: Diagnosis;
+}
+
+interface ApiCreateResponse {
+  success?: boolean;
+  error?: string;
+  id?: string;
+}
+
+/**
+ * 客户端诊断记录访问层。
+ * PostgreSQL 只能通过服务端 API route 访问（API Key 不能进客户端），
+ * uid 由服务端从 accessToken 解析，客户端传入仅为保持旧签名兼容。
+ */
+export async function createDiagnosis(_userId: string, input: NewDiagnosis) {
+  const res = await apiFetch("/api/diagnoses", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
   });
-  return ref.id;
-}
 
-function readDiagnosis(id: string, data: Record<string, unknown>): Diagnosis {
-  const timestamp = data.createdAt as { toDate?: () => Date } | undefined;
-  return {
-    ...(data as Omit<Diagnosis, "id" | "createdAt">),
-    id,
-    createdAt: timestamp?.toDate ? timestamp.toDate().toISOString() : new Date().toISOString(),
-  };
-}
-
-export async function listUserDiagnoses(userId: string) {
-  const snapshot = await getDocs(query(getDiagnosesCollection(), where("userId", "==", userId)));
-  return snapshot.docs
-    .map((item) => readDiagnosis(item.id, item.data()))
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-}
-
-export async function getUserDiagnosis(id: string, userId: string) {
-  if (!db) {
-    throw new Error("尚未配置 Firebase，无法访问诊断记录。");
+  const payload = (await res.json().catch(() => ({}))) as ApiCreateResponse;
+  if (!res.ok || !payload?.success || !payload.id) {
+    throw new Error(payload?.error ?? "创建诊断记录失败。");
   }
-  const snapshot = await getDoc(doc(db, "diagnoses", id));
-  if (!snapshot.exists()) {
+  return payload.id;
+}
+
+export async function listUserDiagnoses(_userId: string) {
+  const res = await apiFetch("/api/diagnoses");
+  const payload = (await res.json().catch(() => ({}))) as ApiListResponse;
+  if (!res.ok || !payload?.success) {
+    throw new Error(payload?.error ?? "无法读取诊断记录。");
+  }
+  return payload.diagnoses ?? [];
+}
+
+export async function getUserDiagnosis(id: string, _userId: string) {
+  const res = await apiFetch(`/api/diagnoses/${encodeURIComponent(id)}`);
+  if (res.status === 404) {
     return null;
   }
-  const diagnosis = readDiagnosis(snapshot.id, snapshot.data());
-  return diagnosis.userId === userId ? diagnosis : null;
+  const payload = (await res.json().catch(() => ({}))) as ApiDetailResponse;
+  if (!res.ok || !payload?.success) {
+    throw new Error(payload?.error ?? "无法读取诊断记录。");
+  }
+  return payload.diagnosis ?? null;
 }
 
-export async function deleteUserDiagnosis(id: string, userId: string) {
-  const diagnosis = await getUserDiagnosis(id, userId);
-  if (!diagnosis) {
-    throw new Error("无法删除不属于当前用户的记录。");
+export async function deleteUserDiagnosis(id: string, _userId: string) {
+  const res = await apiFetch(`/api/diagnoses/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => ({}))) as ApiDetailResponse;
+    throw new Error(payload?.error ?? "无法删除不属于当前用户的记录。");
   }
-  await deleteDoc(doc(db!, "diagnoses", id));
 }
